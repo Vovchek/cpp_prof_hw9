@@ -3,7 +3,7 @@ name: 'Otus C++ Prof homework 9 `async`'
 on:
   push:
     branches:
-      - main
+      - master
       - feature/github_actions
   # позволяет запускать workflow вручную с вкладки actions в интерфейсе github.com
   workflow_dispatch:
