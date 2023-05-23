@@ -160,6 +160,15 @@ public:
 
 };
 
+struct pcout : public std::stringstream {
+    static inline std::mutex m;
+    ~pcout() {
+        std::lock_guard<std::mutex> l{m};
+        std::cout << rdbuf();
+        std::cout.flush();
+    }
+};
+
 class OstreamLogger : public Observer, public std::enable_shared_from_this<OstreamLogger>
 {
 public:
@@ -188,14 +197,19 @@ public:
 
     void finalizeBlock() override
     {
-        std::cout << "bulk: ";
+        pcout pc;
+        //std::cout << "bulk: ";
+        pc << "bulk: ";
         for (auto &c : data)
         {
             if (&c != &(*data.begin()))
-                std::cout << ", ";
-            std::cout << c;
+                //std::cout << ", ";
+                pc << ", ";
+            //std::cout << c;
+            pc << c;
         }
-        std::cout << '\n';
+        //std::cout << '\n';
+        pc << '\n';
 
         data.clear();
     }
