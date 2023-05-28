@@ -2,6 +2,11 @@
 #include <thread>
 
 #include "async.h"
+#include "processor.h"
+
+using namespace std::chrono_literals;
+
+bool allDone {false};
 
 void t1(std::size_t bulk)
 {
@@ -26,9 +31,19 @@ int main(int, char *[]) {
 
     std::thread th1(&t1, bulk);
     std::thread th2(&t2, bulk);
+    std::thread con_log(&OstreamLogger::writer);
+    std::thread file1_log(&FileLogger::writer, 1);
+    std::thread file2_log(&FileLogger::writer, 2);
 
     th2.join();
     th1.join();
+    allDone = true;
+    OstreamLogger::cv.notify_one();
+    FileLogger::cv.notify_all();
+    con_log.join();
+    file1_log.join();
+    file2_log.join();
+
 /*
     auto h = async::connect(bulk);
     auto h2 = async::connect(bulk);

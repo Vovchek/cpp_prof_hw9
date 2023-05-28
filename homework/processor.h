@@ -14,6 +14,7 @@
 #include <deque>
 #include <filesystem>
 
+extern bool allDone;
 
 class Observer
 {
@@ -32,20 +33,13 @@ public:
 
 class CommandProcessor : public Observable
 {
-    //std::list<std::weak_ptr<Observer>> m_subs;
+    // std::list<std::weak_ptr<Observer>> m_subs;
     std::list<std::shared_ptr<Observer>> m_subs;
     int bulk_depth{0};
     int bulk_size{0};
     int max_bulk{3};
 
-    //std::atomic<bool> request_stop_async{false};
-    //std::atomic<bool> confirm_stop_async{false};
-    bool request_stop_async{false};
-    bool confirm_stop_async{false};
-
 public:
-    std::mutex mutexLockBuf;
-    std::condition_variable condVarLockBuf;
 
     CommandProcessor() = default;
     CommandProcessor(int N) : max_bulk{N} {}
@@ -139,21 +133,24 @@ public:
 
     void terminate()
     {
-        if (bulk_size && !bulk_depth) {
+        if (bulk_size && !bulk_depth)
+        {
             endBlock();
         }
     }
 
-    ~CommandProcessor() {
-        //std::cout << "~CommandProcessor()\n";
+    ~CommandProcessor()
+    {
+        // std::cout << "~CommandProcessor()\n";
     }
-
 };
 
-struct pcout: public std::stringstream {
+struct pcout : public std::stringstream
+{
     static inline std::mutex cout_mutex;
-    ~pcout() {
-        std::lock_guard<std::mutex> l {cout_mutex};
+    ~pcout()
+    {
+        std::lock_guard<std::mutex> l{cout_mutex};
         std::cout << rdbuf();
         std::cout.flush();
     }
@@ -162,8 +159,9 @@ struct pcout: public std::stringstream {
 class OstreamLogger : public Observer, public std::enable_shared_from_this<OstreamLogger>
 {
 public:
-    ~OstreamLogger() {
-        //std::cout << "~OstreamLogger()\n";
+    ~OstreamLogger()
+    {
+        // std::cout << "~OstreamLogger()\n";
     }
     static std::shared_ptr<OstreamLogger> create(CommandProcessor *cp)
     {
@@ -187,33 +185,55 @@ public:
 
     void finalizeBlock() override
     {
-        pcout pcon;
-        //std::cout << "bulk: ";
-        pcon << "bulk: ";
-        for (auto &c : data)
-        {
-            if (&c != &(*data.begin()))
-                //std::cout << ", ";
-                pcon << ", ";
-            //std::cout << c;
-            pcon << c;
-        }
-        //std::cout << '\n';
-        pcon << '\n';
-
-        data.clear();
+        std::lock_guard<std::mutex> l{m};
+        que.emplace_back(std::move(data));
+        cv.notify_one();
     }
 
+    static void writer()
+    {
+        do
+        {
+            std::unique_lock<std::mutex> l{m, std::defer_lock};
+            l.lock();
+            cv.wait(l, []
+                    { return !que.empty() || allDone; });
+
+            if (!que.empty())
+            {
+                auto bulk = std::move(que.front());
+                que.pop_front();
+                l.unlock();
+
+                pcout log;
+                log << "bulk: ";
+                for (auto &c : bulk)
+                {
+                    if (&c != &(*bulk.begin()))
+                        log << ", ";
+                    log << c;
+                }
+                log << '\n';
+            }
+            else
+                l.unlock();
+        } while (!allDone || !que.empty());
+    }
+
+    static inline std::condition_variable cv;
 private:
     OstreamLogger() = default;
     std::list<std::string> data;
+    static inline std::deque<std::list<std::string>> que;
+    static inline std::mutex m;
 };
 
 class FileLogger : public Observer, public std::enable_shared_from_this<FileLogger>
 {
 public:
-    ~FileLogger() {
-        //std::cout << "~FileLogger()\n";
+    ~FileLogger()
+    {
+        // std::cout << "~FileLogger()\n";
     }
     static std::shared_ptr<FileLogger> create(CommandProcessor *cp)
     {
@@ -238,24 +258,48 @@ public:
 
     void finalizeBlock() override
     {
-        std::unique_lock<std::mutex> l{fn_mutex};
-        std::string unique_name = log_name + ".log";
-        for(auto i{0}; std::filesystem::exists(unique_name); ++i) {
-            unique_name = log_name + std::to_string(i) + ".log";
-        }
-        std::ofstream log(unique_name);
-        fn_mutex.unlock();
+        std::lock_guard<std::mutex> l{m};
+        que.emplace_back(std::pair(std::move(log_name), std::move(data)));
+        cv.notify_one();
+    }
 
-        log << "bulk: ";
-        for (auto &c : data)
-        {
-            if (&c != &(*data.begin()))
-                log << ", ";
-            log << c;
-        }
-        log << '\n';
+    static void writer(int n)
+    {
+        do {
+            std::unique_lock<std::mutex> l{m, std::defer_lock};
+            l.lock();
+            cv.wait(l, []
+                    { return !que.empty() || allDone; });
 
-        data.clear();
+            if (!que.empty())
+            {
+                auto bulk = std::move(que.front());
+                que.pop_front();
+                l.unlock();
+                //adding  _n does not ensure uniqueness, but helps to distinguish writers visually
+                auto suffix = "_" + std::to_string(n) + ".log";
+                std::string unique_name = bulk.first + suffix;
+                std::unique_lock<std::mutex> l{fn_mutex};
+                for (auto i{0}; std::filesystem::exists(unique_name); ++i)
+                {
+                    unique_name = bulk.first + std::to_string(i) + suffix;
+                }
+                std::ofstream log(unique_name);
+                fn_mutex.unlock();
+
+                log << "bulk: ";
+                for (auto &c : bulk.second)
+                {
+                    if (&c != &(*bulk.second.begin()))
+                        log << ", ";
+                    log << c;
+                }
+                log << '\n';
+            }
+            else
+                l.unlock();
+        } while (!allDone || !que.empty());
+
     }
 
     /**
@@ -272,9 +316,12 @@ public:
         return fn;
     }
 
+    static inline std::condition_variable cv;
 private:
     FileLogger() = default;
     std::list<std::string> data;
     std::string log_name;
     static inline std::mutex fn_mutex;
+    static inline std::mutex m;
+    static inline std::deque<std::pair<std::string, std::list<std::string>>> que;
 };
