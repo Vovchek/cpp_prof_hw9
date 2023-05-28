@@ -12,6 +12,7 @@
 #include <atomic>
 #include <mutex>
 #include <deque>
+#include <filesystem>
 
 
 class Observer
@@ -143,27 +144,16 @@ public:
         }
     }
 
-    void runAsync(std::deque<std::string> &buf); /// @brief intended to run as a detached thread
-
-    void stopAsync() {
-        request_stop_async = true; // this terminates runAsync()
-        condVarLockBuf.notify_one();
-        {
-            std::unique_lock<std::mutex> lck{mutexLockBuf};
-            condVarLockBuf.wait(lck, [this](){return confirm_stop_async == true;});
-        }
-    }
-
     ~CommandProcessor() {
         //std::cout << "~CommandProcessor()\n";
     }
 
 };
 
-struct pcout : public std::stringstream {
-    static inline std::mutex m;
+struct pcout: public std::stringstream {
+    static inline std::mutex cout_mutex;
     ~pcout() {
-        std::lock_guard<std::mutex> l{m};
+        std::lock_guard<std::mutex> l {cout_mutex};
         std::cout << rdbuf();
         std::cout.flush();
     }
@@ -197,19 +187,19 @@ public:
 
     void finalizeBlock() override
     {
-        pcout pc;
+        pcout pcon;
         //std::cout << "bulk: ";
-        pc << "bulk: ";
+        pcon << "bulk: ";
         for (auto &c : data)
         {
             if (&c != &(*data.begin()))
                 //std::cout << ", ";
-                pc << ", ";
+                pcon << ", ";
             //std::cout << c;
-            pc << c;
+            pcon << c;
         }
         //std::cout << '\n';
-        pc << '\n';
+        pcon << '\n';
 
         data.clear();
     }
@@ -248,7 +238,13 @@ public:
 
     void finalizeBlock() override
     {
-        std::ofstream log(log_name);
+        std::unique_lock<std::mutex> l{fn_mutex};
+        std::string unique_name = log_name + ".log";
+        for(auto i{0}; std::filesystem::exists(unique_name); ++i) {
+            unique_name = log_name + std::to_string(i) + ".log";
+        }
+        std::ofstream log(unique_name);
+        fn_mutex.unlock();
 
         log << "bulk: ";
         for (auto &c : data)
@@ -272,8 +268,7 @@ public:
     {
         std::string fn{"bulk" +
                        std::to_string(
-                           std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count()) +
-                       ".log"};
+                           std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count())};
         return fn;
     }
 
@@ -281,4 +276,5 @@ private:
     FileLogger() = default;
     std::list<std::string> data;
     std::string log_name;
+    static inline std::mutex fn_mutex;
 };

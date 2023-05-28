@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.14)
 
 set(CMAKE_CXX_STANDARD 17)
 
+enable_language(CXX)
+find_package(Threads)
+
 set(PATCH_VERSION "1" CACHE INTERNAL "Patch version")
 set(PROJECT_VESRION 0.0.${PATCH_VERSION})
 
@@ -16,18 +19,18 @@ add_executable(${PROJECT_NAME}_cli
     homework/main.cpp
 )
 
-set_target_properties(async_cli PROPERTIES    # target PROPERTIES prop1 value1  ...
+set_target_properties(${PROJECT_NAME}_cli PROPERTIES    # target PROPERTIES prop1 value1  ...
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
 
-target_compile_options(async PRIVATE
+target_compile_options(${PROJECT_NAME} PRIVATE
     -Wall -Wextra -pedantic -Werror
 )
 
-target_link_libraries(async_cli async)
+target_link_libraries(${PROJECT_NAME}_cli Threads::Threads async)
 
-install(TARGETS async async_cli RUNTIME DESTINATION bin)
+install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_cli RUNTIME DESTINATION bin)
 
 set(CPACK_GENERATOR DEB)
 
